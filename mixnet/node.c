@@ -10,11 +10,28 @@
  */
 #include "node.h"
 
+#include "address.h"
 #include "connection.h"
 #include "packet.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+
+typedef struct {
+    mixnet_address root; 
+    uint16_t cost;
+} stp_edge_t;
+
+typedef struct {
+    bool           have_addr;
+    mixnet_address neighbor_addr;
+    stp_edge_t     root_cost;
+} stp_state_t;
+
+int node_compare(mixnet_address curr_root, mixnet_address from_root,)
+
+
+// need to do dijkstras for cp2
 
 void run_node(void *const handle,
               volatile bool *const keep_running,
@@ -22,5 +39,7 @@ void run_node(void *const handle,
 
     (void) c;
     (void) handle;
-    while(*keep_running) {}
+    while(*keep_running) {
+        
+    }
 }

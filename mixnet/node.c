@@ -15,7 +15,7 @@
 #include "connection.h"
 #include "packet.h"
 
-#include <cstdint>
+//#include <cstdint>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -62,7 +62,6 @@ void run_node(void *const handle,
     stp_info my_info = {c.node_addr, c.node_addr, 0};
     neighbor_state_t *neighbor_info = (neighbor_state_t*)calloc(c.num_neighbors, sizeof(neighbor_state_t));
     
-    // Initially unblocking all nodes
     for (int i = 0; i < c.num_neighbors; i++) {
         neighbor_info[i].blocked = false;
         mixnet_packet *to_send_packet = (mixnet_packet*)malloc(18);
@@ -81,7 +80,9 @@ void run_node(void *const handle,
         // packet received
         if (mixnet_recv(handle, &port, &packet) == 1) {
             if (port == c.num_neighbors){ // source node
+                printf("user sent flood packet. sending flood out as source node\n");
                 if (packet->type == 1) { // PACKET TYPE FLOOD
+                    printf("packet type is actually flood\n");
                     // TODO: CP1
                     // broadcast along spanning tree
                     for (uint8_t port_n = 0; port_n <c.num_neighbors; port_n++) {
@@ -113,17 +114,36 @@ void run_node(void *const handle,
                             my_info.root_addr = payload->root_address;
                             my_info.next_hop = payload->node_address;
                             my_info.path_len += 1;
+                            
                         }
 
-                        if (my_info.root_addr == payload->root_address && my_info.path_len + 1 == payload->path_length) {
+                        if ((my_info.root_addr == payload->root_address && my_info.path_len + 1 == payload->path_length) ||
+                            my_info.next_hop == payload->node_address) {
                             neighbor_info[port].blocked = false;
                         } else {
                             neighbor_info[port].blocked = true;
+                        }
+
+                        if (to_update) {
+                            for (int i = 0; i < c.num_neighbors; i++) {
+                                if (!neighbor_info[i].blocked) {
+                                    mixnet_packet *to_send_packet = (mixnet_packet*)malloc(18);
+                                    to_send_packet->total_size = 18;
+                                    to_send_packet->type = PACKET_TYPE_STP;
+                                    mixnet_packet_stp* stp = (mixnet_packet_stp*)(to_send_packet->payload);
+                                    stp->root_address = c.node_addr;
+                                    stp->path_length= 0;
+                                    stp->node_address= c.node_addr;
+                                    mixnet_send(handle, i, to_send_packet);
+                                }
+                            }
                         }
                     } else { // PACKET TYPE LSA
                         // TODO: CP2
                     }
                 } else {
+                    printf("in else\n");
+                    // exit(1);
                     if (packet->type == 1) { // PACKET TYPE FLOOD
                         // TODO: CP1
                         // Send node to unblocked neighbors and send to user
@@ -132,6 +152,10 @@ void run_node(void *const handle,
                                 //allocate new buffer, copy contents of packet to buffer
                                 mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
                                 memcpy(new_packet, packet, packet->total_size);
+                                if (port_n == c.num_neighbors) {
+                                    printf("sending to user\n");
+                                    // exit(1);
+                                }
                                 mixnet_send(handle, port_n, new_packet);
                             }
                         }
@@ -143,7 +167,7 @@ void run_node(void *const handle,
         } else { // no packet received 
  
         }
-        printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);
+        //printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);
     }
     printf("Done keep_running\n");
 }

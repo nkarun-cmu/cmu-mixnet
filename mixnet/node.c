@@ -11,9 +11,12 @@
 #include "node.h"
 
 #include "address.h"
+#include "config.h"
 #include "connection.h"
 #include "packet.h"
 
+#include <cstdint>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

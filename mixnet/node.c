@@ -58,7 +58,7 @@ void run_node(void *const handle,
 
     (void) c;
     (void) handle;
-    //printf("running node: %d\n", c.node_addr);
+    // printf("running node: %d\n", c.node_addr);
     stp_info my_info = {c.node_addr, c.node_addr, 0};
     neighbor_state_t *neighbor_info = (neighbor_state_t*)calloc(c.num_neighbors, sizeof(neighbor_state_t));
     
@@ -80,14 +80,11 @@ void run_node(void *const handle,
         // packet received
         if (mixnet_recv(handle, &port, &packet) == 1) {
             if (port == c.num_neighbors){ // source node
-                //printf("user sent flood packet. sending flood out as source node\n");
+                // printf("user sent flood packet. sending flood out as source node\n");
                 if (packet->type == 1) { // PACKET TYPE FLOOD
-                    ////printf("packet type is actually flood\n");
-                    // TODO: CP1
-                    // broadcast along spanning tree
+                    // printf("packet type is actually flood\n");
                     for (uint8_t port_n = 0; port_n <c.num_neighbors; port_n++) {
                         if (!neighbor_info[port_n].blocked) {
-                            //allocate new buffer, copy contents of packet to buffer
                             mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
                             memcpy(new_packet, packet, packet->total_size);
                             mixnet_send(handle, port_n, new_packet);
@@ -98,78 +95,64 @@ void run_node(void *const handle,
                 }
             } else { 
                 // check if control packet. in cp1 not doing anything else tho
-                if (packet->type == 0 || packet->type == 2) {
-                    if (packet->type == 0) { // PACKET TYPE STP
-                        //printf("another node sent stp packet\n");
-                        mixnet_packet_stp* payload = (mixnet_packet_stp*)(packet->payload);
-                        // TODO: CP1
-                        // neighbor discovery
-                        neighbor_info[port].neighbor_addr = payload->node_address;
-                        //neighbor_info[port].length_from_root = payload->path_length; 
-                        //neighbor_info[port].root_addr = payload->root_address;
+                if (packet->type == PACKET_TYPE_STP) {
+                    mixnet_packet_stp* payload = (mixnet_packet_stp*)(packet->payload);
+                    
+                    neighbor_info[port].neighbor_addr = payload->node_address;
+                    bool to_update = node_compare(payload, my_info);
 
-                        // Deciding whether to take update (slide 8 reci)
-                        bool to_update = node_compare(payload, my_info);
-
-                        if (to_update) {
-                            my_info.root_addr = payload->root_address;
-                            my_info.next_hop = payload->node_address;
-                            my_info.path_len += 1;
-                            
+                    if (to_update) {
+                        my_info.root_addr = payload->root_address;
+                        my_info.next_hop = payload->node_address;
+                        my_info.path_len = payload->path_length + 1;
+                        
+                        for (int i = 0; i < c.num_neighbors; i++) {
+                            mixnet_packet *to_send_packet = (mixnet_packet*)malloc(18);
+                            to_send_packet->total_size = 18;
+                            to_send_packet->type = PACKET_TYPE_STP;
+                            mixnet_packet_stp* stp = (mixnet_packet_stp*)(to_send_packet->payload);
+                            stp->root_address = my_info.root_addr;
+                            stp->path_length = my_info.path_len;
+                            stp->node_address = c.node_addr;
+                            mixnet_send(handle, i, to_send_packet);
                         }
-
-                        if ((my_info.root_addr == payload->root_address && my_info.path_len + 1 == payload->path_length) ||
-                            (my_info.next_hop == payload->node_address) || (my_info.root_addr == c.node_addr)) {
-                            neighbor_info[port].blocked = false;
-                            //printf("unblocking node %d\n", payload->node_address);
-                        } else {
-                            neighbor_info[port].blocked = true;
-                            //printf("blocking node %d\n", payload->node_address);
-                        }
-
-                        if (to_update) {
-                            for (int i = 0; i < c.num_neighbors; i++) {
-                                mixnet_packet *to_send_packet = (mixnet_packet*)malloc(18);
-                                to_send_packet->total_size = 18;
-                                to_send_packet->type = PACKET_TYPE_STP;
-                                mixnet_packet_stp* stp = (mixnet_packet_stp*)(to_send_packet->payload);
-                                stp->root_address = c.node_addr;
-                                stp->path_length= 0;
-                                stp->node_address= c.node_addr;
-                                mixnet_send(handle, i, to_send_packet);
-                            }
-                        }
-                    } else { // PACKET TYPE LSA
-                        // TODO: CP2
                     }
-                } else {
-                    ////printf("in else\n");
-                    // exit(1);
-                    if (packet->type == 1) { // PACKET TYPE FLOOD
-                    //printf("another node sent flood packet\n");
-                        // TODO: CP1
-                        // Send node to unblocked neighbors and send to user
+                    
+                    bool should_unblock = false;
+                    
+                    if (my_info.root_addr == payload->root_address) {
+                        if (payload->path_length + 1 == my_info.path_len && 
+                            payload->node_address == my_info.next_hop) {
+                            should_unblock = true;
+                        } else if (payload->path_length > my_info.path_len) {
+                            should_unblock = true;
+                        }
+                    }
+                    
+                    neighbor_info[port].blocked = !should_unblock;
+                } else if (packet->type == PACKET_TYPE_LSA) { // PACKET TYPE LSA
+                    // TODO: CP2
+                } else if (packet->type == PACKET_TYPE_FLOOD) {
                         for (uint8_t port_n = 0; port_n <= c.num_neighbors; port_n++) {
-                            if ((!neighbor_info[port_n].blocked || port_n == c.num_neighbors) && (port_n != port)) {
-                                //allocate new buffer, copy contents of packet to buffer
+                            if (port_n < c.num_neighbors && !neighbor_info[port_n].blocked && port_n != port) {
+                                // Forward to neighbors
                                 mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
                                 memcpy(new_packet, packet, packet->total_size);
-                                if (port_n == c.num_neighbors) {
-                                    //printf("sending to user FINAL RECEIVED!!\n");
-                                    // exit(1);
-                                }
+                                mixnet_send(handle, port_n, new_packet);
+                            } else if (port_n == c.num_neighbors) {
+                                // Forward to user
+                                mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
+                                memcpy(new_packet, packet, packet->total_size);
                                 mixnet_send(handle, port_n, new_packet);
                             }
                         }
-                    } else {
-                        // TODO: CP2 
-                    }
+                } else {
+                    // TODO: CP2 
                 }
             }
-            //printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);
-        } else { // no packet received 
- 
+            free(packet);
         }
     }
-    //printf("Done keep_running\n");
+    //printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);
+    free(neighbor_info);
 }

@@ -97,35 +97,44 @@ void run_node(void *const handle,
                 // check if control packet. in cp1 not doing anything else tho
                 if (packet->type == PACKET_TYPE_STP) {
                     mixnet_packet_stp* payload = (mixnet_packet_stp*)(packet->payload);
-                    
                     neighbor_info[port].neighbor_addr = payload->node_address;
                     bool to_update = node_compare(payload, my_info);
 
                     if (to_update) {
+                        mixnet_address old_next_hop = my_info.next_hop;
                         my_info.root_addr = payload->root_address;
                         my_info.next_hop = payload->node_address;
                         my_info.path_len = payload->path_length + 1;
-                        
-                        // Broadcast updated info
+
+                        if (old_next_hop != c.node_addr) {
+                            for (int i = 0; i < c.num_neighbors; i++) {
+                                if (neighbor_info[i].neighbor_addr == old_next_hop) {
+                                    neighbor_info[i].blocked = true;
+                                }
+                            }
+                        }
+
                         for (int i = 0; i < c.num_neighbors; i++) {
-                            mixnet_packet *to_send_packet = (mixnet_packet*)malloc(18);
-                            to_send_packet->total_size = 18;
+                            mixnet_packet *to_send_packet = (mixnet_packet*)malloc(sizeof(mixnet_packet) + sizeof(mixnet_packet_stp));
+                            to_send_packet->total_size = sizeof(mixnet_packet) + sizeof(mixnet_packet_stp);
                             to_send_packet->type = PACKET_TYPE_STP;
-                            mixnet_packet_stp* stp = (mixnet_packet_stp*)(to_send_packet->payload);
-                            stp->root_address = my_info.root_addr;
-                            stp->path_length = my_info.path_len;
-                            stp->node_address = c.node_addr;
+                            
+                            mixnet_packet_stp* stp_payload = (mixnet_packet_stp*)(to_send_packet->payload);
+                            stp_payload->root_address = my_info.root_addr;
+                            stp_payload->path_length = my_info.path_len;
+                            stp_payload->node_address = c.node_addr;
+                            
                             mixnet_send(handle, i, to_send_packet);
                         }
                     }
-                    
+
                     bool should_unblock = false;
                     
                     if (my_info.root_addr == payload->root_address) {
                         if (payload->path_length + 1 == my_info.path_len && 
                             payload->node_address == my_info.next_hop) {
                             should_unblock = true;
-                        } else if (payload->path_length > my_info.path_len) {
+                        } else if (payload->path_length == my_info.path_len + 1) {
                             should_unblock = true;
                         }
                     }
@@ -151,9 +160,9 @@ void run_node(void *const handle,
                     // TODO: CP2 
                 }
             }
-            // free(packet);
+            free(packet);
         }
     }
     //printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);
-    // free(neighbor_info); // TODO: when to free??
+    free(neighbor_info); // TODO: when to free??
 }

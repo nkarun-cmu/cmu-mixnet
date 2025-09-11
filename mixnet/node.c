@@ -106,6 +106,7 @@ void run_node(void *const handle,
                         my_info.next_hop = payload->node_address;
                         my_info.path_len = payload->path_length + 1;
                         
+                        // Broadcast updated info
                         for (int i = 0; i < c.num_neighbors; i++) {
                             mixnet_packet *to_send_packet = (mixnet_packet*)malloc(18);
                             to_send_packet->total_size = 18;
@@ -135,7 +136,7 @@ void run_node(void *const handle,
                 } else if (packet->type == PACKET_TYPE_FLOOD) {
                         for (uint8_t port_n = 0; port_n <= c.num_neighbors; port_n++) {
                             if (port_n < c.num_neighbors && !neighbor_info[port_n].blocked && port_n != port) {
-                                // Forward to neighbors
+                                // Forward to unblocked neighbors
                                 mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
                                 memcpy(new_packet, packet, packet->total_size);
                                 mixnet_send(handle, port_n, new_packet);
@@ -154,5 +155,5 @@ void run_node(void *const handle,
         }
     }
     //printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);
-    free(neighbor_info);
+    // free(neighbor_info); // TODO: when to free??
 }

@@ -151,7 +151,7 @@ void run_node(void *const handle,
                     // TODO: CP2 
                 }
             }
-            free(packet);
+            // free(packet);
         }
     }
     //printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);

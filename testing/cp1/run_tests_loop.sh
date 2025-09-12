@@ -6,6 +6,7 @@ tests=(
     "./bin/cp1/testcase_tree_easy -a"
     "./bin/cp1/testcase_tree_hard -a"
     "./bin/cp1/testcase_ring_easy -a"
+    "./bin/cp1/testcase_ring_hard -a"
     "./bin/cp1/testcase_full_mesh_easy -a"
     "./bin/cp1/testcase_full_mesh_hard -a"
     "./bin/cp1/testcase_tiebreak_pathlen -a"
@@ -15,6 +16,7 @@ tests=(
     "./bin/cp1/testcase_unreachable -a"
     "./bin/cp1/testcase_link_failure_root -a"
     "./bin/cp1/testcase_link_failure_ring -a"
+    "./bin/cp1/testcase_link_failure_mesh -a"
 )
 
 iteration=1

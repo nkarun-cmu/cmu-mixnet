@@ -96,7 +96,7 @@ void run_node(void *const handle,
     uint64_t last_hello_time = time_now();
     uint64_t last_root_message_time = time_now();
     
-    // printf("running node: %d\n", c.node_addr);
+    //printf("running node: %d\n", c.node_addr);
     stp_info my_info = {c.node_addr, c.node_addr, 0};
     neighbor_state_t *neighbor_info = (neighbor_state_t*)calloc(c.num_neighbors, sizeof(neighbor_state_t));
     
@@ -132,7 +132,7 @@ void run_node(void *const handle,
             my_info.next_hop = c.node_addr;
             my_info.path_len = 0;
             
-            // Block the old path to root
+            ///Block the old path to root
             if (old_next_hop != c.node_addr) {
                 for (int i = 0; i < c.num_neighbors; i++) {
                     if (neighbor_info[i].neighbor_addr == old_next_hop) {
@@ -151,7 +151,7 @@ void run_node(void *const handle,
         // packet received
         if (mixnet_recv(handle, &port, &packet) == 1) {
             if (port == c.num_neighbors){ // source node
-                // printf("user sent flood packet. sending flood out as source node\n");
+                //printf("user sent flood packet. sending flood out as source node\n");
                 if (packet->type == 1) { // PACKET TYPE FLOOD
                     // printf("packet type is actually flood\n");
                     for (uint8_t port_n = 0; port_n <c.num_neighbors; port_n++) {
@@ -167,6 +167,7 @@ void run_node(void *const handle,
                 if (packet->type == PACKET_TYPE_STP) {
                     mixnet_packet_stp* payload = (mixnet_packet_stp*)(packet->payload);
                     neighbor_info[port].neighbor_addr = payload->node_address;
+                    //printf("received stp packet from %d claiming %d is the root with path len %d\n", payload->node_address, payload->root_address, payload->path_length);
                     
                     // Update the time we last received a message from root path
                     if (my_info.root_addr != c.node_addr && 
@@ -187,6 +188,7 @@ void run_node(void *const handle,
                     }
 
                     if (to_update) {
+                        //printf("updating root\n");
                         mixnet_address old_next_hop = my_info.next_hop;
                         my_info.root_addr = payload->root_address;
                         my_info.next_hop = payload->node_address;
@@ -217,9 +219,14 @@ void run_node(void *const handle,
                     }
                     
                     neighbor_info[port].blocked = !should_unblock;
+                    ///printf("root: %d, next hop: %d, path len: %d\n", my_info.root_addr, my_info.next_hop, my_info.path_len);
+                    // for (int i = 0; i < c.num_neighbors; i++) {
+                    //     printf("link to %d blocked: %s\n", neighbor_info[i].neighbor_addr, neighbor_info[i].blocked ? "true" : "false");
+                    // }
                 } else if (packet->type == PACKET_TYPE_LSA) { // PACKET TYPE LSA
                     // TODO: CP2
                 } else if (packet->type == PACKET_TYPE_FLOOD) {
+                    if (!neighbor_info[port].blocked) {
                         for (uint8_t port_n = 0; port_n <= c.num_neighbors; port_n++) {
                             if (port_n < c.num_neighbors && !neighbor_info[port_n].blocked && port_n != port) {
                                 // Forward to unblocked neighbors
@@ -229,6 +236,7 @@ void run_node(void *const handle,
                                 forward_stp(handle, port_n, packet);
                             }
                         }
+                    }
                 } else {
                     // TODO: CP2 
                 }

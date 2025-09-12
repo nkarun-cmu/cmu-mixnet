@@ -15,11 +15,11 @@
 #include "connection.h"
 #include "packet.h"
 
-//#include <cstdint>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct {
     mixnet_address neighbor_addr;
@@ -51,6 +51,37 @@ bool node_compare(mixnet_packet_stp* payload, stp_info info) {
     return false;
 }
 
+int forward_stp(void *const handle, uint8_t port_n, mixnet_packet *packet) {
+    mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
+    memcpy(new_packet, packet, packet->total_size);
+    return mixnet_send(handle, port_n, new_packet);
+}
+
+int send_stp(void *const handle, const struct mixnet_node_config c, stp_info my_info){
+    int fail;
+    for (int i = 0; i < c.num_neighbors; i++) {
+        mixnet_packet *to_send_packet = (mixnet_packet*)malloc(sizeof(mixnet_packet) + sizeof(mixnet_packet_stp));
+        to_send_packet->total_size = sizeof(mixnet_packet) + sizeof(mixnet_packet_stp);
+        to_send_packet->type = PACKET_TYPE_STP;
+        
+        mixnet_packet_stp* stp_payload = (mixnet_packet_stp*)(to_send_packet->payload);
+        stp_payload->root_address = my_info.root_addr;
+        stp_payload->path_length = my_info.path_len;
+        stp_payload->node_address = c.node_addr;
+        
+        fail = mixnet_send(handle, i, to_send_packet);
+        if (fail == -1) {
+            return -1;
+        }
+    }
+    return 1;
+}
+
+static uint64_t time_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
 
 void run_node(void *const handle,
               volatile bool *const keep_running,
@@ -58,6 +89,13 @@ void run_node(void *const handle,
 
     (void) c;
     (void) handle;
+    int reelection_interval = c.reelection_interval_ms;
+    int hello_interval = c.root_hello_interval_ms;
+    
+    // Timer variables
+    uint64_t last_hello_time = time_now();
+    uint64_t last_root_message_time = time_now();
+    
     // printf("running node: %d\n", c.node_addr);
     stp_info my_info = {c.node_addr, c.node_addr, 0};
     neighbor_state_t *neighbor_info = (neighbor_state_t*)calloc(c.num_neighbors, sizeof(neighbor_state_t));
@@ -75,6 +113,39 @@ void run_node(void *const handle,
     }
 
     while(*keep_running) {
+        uint64_t current_time = time_now();
+        
+        // Check if we need to send hello messages (only if we are the root)
+        if (my_info.root_addr == c.node_addr && 
+            current_time - last_hello_time >= (uint64_t)hello_interval) {
+                send_stp(handle, c, my_info);
+                last_hello_time = current_time;
+        }
+        
+        // Check for reelection timeout (only if we are NOT the root)
+        if (my_info.root_addr != c.node_addr && 
+            current_time - last_root_message_time >= (uint64_t)reelection_interval) {
+            
+            // Start reelection - assume we are the new root
+            mixnet_address old_next_hop = my_info.next_hop;
+            my_info.root_addr = c.node_addr;
+            my_info.next_hop = c.node_addr;
+            my_info.path_len = 0;
+            
+            // Block the old path to root
+            if (old_next_hop != c.node_addr) {
+                for (int i = 0; i < c.num_neighbors; i++) {
+                    if (neighbor_info[i].neighbor_addr == old_next_hop) {
+                        neighbor_info[i].blocked = true;
+                    }
+                }
+            }
+            
+            // Broadcast our new root claim
+            send_stp(handle, c, my_info);           
+            last_root_message_time = current_time;
+        }
+
         mixnet_packet *packet;
         uint8_t port = 0;
         // packet received
@@ -85,9 +156,7 @@ void run_node(void *const handle,
                     // printf("packet type is actually flood\n");
                     for (uint8_t port_n = 0; port_n <c.num_neighbors; port_n++) {
                         if (!neighbor_info[port_n].blocked) {
-                            mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
-                            memcpy(new_packet, packet, packet->total_size);
-                            mixnet_send(handle, port_n, new_packet);
+                            forward_stp(handle, port_n, packet);
                         }
                     }
                 } else { // PACKET TYPE PING OR DATA
@@ -98,13 +167,33 @@ void run_node(void *const handle,
                 if (packet->type == PACKET_TYPE_STP) {
                     mixnet_packet_stp* payload = (mixnet_packet_stp*)(packet->payload);
                     neighbor_info[port].neighbor_addr = payload->node_address;
+                    
+                    // Update the time we last received a message from root path
+                    if (my_info.root_addr != c.node_addr && 
+                        payload->root_address == my_info.root_addr &&
+                        payload->node_address == my_info.next_hop) {
+                        last_root_message_time = current_time;
+                    }
+                    
                     bool to_update = node_compare(payload, my_info);
+
+                    if ((payload->node_address == my_info.next_hop) &&
+                        (payload->root_address == my_info.root_addr && 
+                        payload->path_length + 1 == my_info.path_len)) {
+                        //send on all ports!!!
+                        send_stp(handle, c, my_info);
+                        //reset reelection timer
+                        last_root_message_time = current_time;
+                    }
 
                     if (to_update) {
                         mixnet_address old_next_hop = my_info.next_hop;
                         my_info.root_addr = payload->root_address;
                         my_info.next_hop = payload->node_address;
                         my_info.path_len = payload->path_length + 1;
+                        
+                        // Reset timer since we have a new root path
+                        last_root_message_time = current_time;
 
                         if (old_next_hop != c.node_addr) {
                             for (int i = 0; i < c.num_neighbors; i++) {
@@ -114,20 +203,8 @@ void run_node(void *const handle,
                             }
                         }
 
-                        for (int i = 0; i < c.num_neighbors; i++) {
-                            mixnet_packet *to_send_packet = (mixnet_packet*)malloc(sizeof(mixnet_packet) + sizeof(mixnet_packet_stp));
-                            to_send_packet->total_size = sizeof(mixnet_packet) + sizeof(mixnet_packet_stp);
-                            to_send_packet->type = PACKET_TYPE_STP;
-                            
-                            mixnet_packet_stp* stp_payload = (mixnet_packet_stp*)(to_send_packet->payload);
-                            stp_payload->root_address = my_info.root_addr;
-                            stp_payload->path_length = my_info.path_len;
-                            stp_payload->node_address = c.node_addr;
-                            
-                            mixnet_send(handle, i, to_send_packet);
-                        }
+                        send_stp(handle, c, my_info);
                     }
-
                     bool should_unblock = false;
                     
                     if (my_info.root_addr == payload->root_address) {
@@ -146,14 +223,10 @@ void run_node(void *const handle,
                         for (uint8_t port_n = 0; port_n <= c.num_neighbors; port_n++) {
                             if (port_n < c.num_neighbors && !neighbor_info[port_n].blocked && port_n != port) {
                                 // Forward to unblocked neighbors
-                                mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
-                                memcpy(new_packet, packet, packet->total_size);
-                                mixnet_send(handle, port_n, new_packet);
+                                forward_stp(handle, port_n, packet);
                             } else if (port_n == c.num_neighbors) {
                                 // Forward to user
-                                mixnet_packet *new_packet = (mixnet_packet*)malloc(packet->total_size);
-                                memcpy(new_packet, packet, packet->total_size);
-                                mixnet_send(handle, port_n, new_packet);
+                                forward_stp(handle, port_n, packet);
                             }
                         }
                 } else {

@@ -26,7 +26,6 @@ typedef struct {
     mixnet_address root_addr; 
     uint16_t length_from_root;
     bool blocked;
-    // cost field 
 } neighbor_state_t;
 
 typedef struct {
@@ -34,6 +33,18 @@ typedef struct {
     mixnet_address next_hop;
     uint16_t path_len;
 } stp_info;
+
+typedef struct {
+    mixnet_address neighbor_addr;
+    uint16_t cost;
+    //addr_cost* next;
+} addr_cost;
+
+typedef struct global_view {
+    mixnet_address node_addr;
+    addr_cost* edge_list;
+    struct global_view* next;
+} global_view;
 
 bool node_compare(mixnet_packet_stp* payload, stp_info info) {
     mixnet_address update_root = payload->root_address;
@@ -83,6 +94,27 @@ static uint64_t time_now(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
+global_view find_in_global_view_list(global_view l, mixnet_address to_find_addr) {
+    global_view current = l
+    while (current != NULL) {
+        if current.node_addr == to_find_addr {
+            return current
+        }
+    }
+    return NULL
+}
+
+bool add_to_list(global_view l, mixnet_address node_addr, addr_cost *edge_list) {
+    if find_in_global_view_list(l, node_addr) == NULL { // does not currently exist in global view
+        global_view* new_global_node = malloc(sizeof(global_view));
+        new_global_node.edge_list = edge_list;
+        new_global_node.node_addr = node_addr
+        // ADD POINTER TO NEXT
+    }
+    return true;
+    // global_view current =
+}
+
 void run_node(void *const handle,
               volatile bool *const keep_running,
               const struct mixnet_node_config c) {
@@ -91,12 +123,23 @@ void run_node(void *const handle,
     (void) handle;
     int reelection_interval = c.reelection_interval_ms;
     int hello_interval = c.root_hello_interval_ms;
+    uint16_t cost = c.link_costs[4];
+    printf("cost: %d\n", cost);
+    
+    addr_cost *neighbhor_costs = malloc(sizeof(addr_cost)*(c.num_neighbors-1));
+    for (int i = 0; i < c.num_neighbors; i++) {
+        neighbhor_costs[i].cost = c.link_costs[i];
+    }
+    global_view *adj_list_start = malloc(sizeof(global_view)); //will start with pointer to our own list
+    adj_list_start->node_addr = c.node_addr;
+    adj_list_start->edge_list = neighbhor_costs;
+    adj_list_start->next = NULL;
     
     // Timer variables
     uint64_t last_hello_time = time_now();
     uint64_t last_root_message_time = time_now();
     
-    //printf("running node: %d\n", c.node_addr);
+    // printf("running node: %d\n", c.node_addr);
     stp_info my_info = {c.node_addr, c.node_addr, 0};
     neighbor_state_t *neighbor_info = (neighbor_state_t*)calloc(c.num_neighbors, sizeof(neighbor_state_t));
     
@@ -167,6 +210,7 @@ void run_node(void *const handle,
                 if (packet->type == PACKET_TYPE_STP) {
                     mixnet_packet_stp* payload = (mixnet_packet_stp*)(packet->payload);
                     neighbor_info[port].neighbor_addr = payload->node_address;
+                    neighbhor_costs[port].neighbor_addr = payload->node_address;
                     //printf("received stp packet from %d claiming %d is the root with path len %d\n", payload->node_address, payload->root_address, payload->path_length);
                     
                     // Update the time we last received a message from root path
@@ -219,12 +263,13 @@ void run_node(void *const handle,
                     }
                     
                     neighbor_info[port].blocked = !should_unblock;
-                    ///printf("root: %d, next hop: %d, path len: %d\n", my_info.root_addr, my_info.next_hop, my_info.path_len);
+                    // printf("root: %d, next hop: %d, path len: %d\n", my_info.root_addr, my_info.next_hop, my_info.path_len);
                     // for (int i = 0; i < c.num_neighbors; i++) {
                     //     printf("link to %d blocked: %s\n", neighbor_info[i].neighbor_addr, neighbor_info[i].blocked ? "true" : "false");
                     // }
                 } else if (packet->type == PACKET_TYPE_LSA) { // PACKET TYPE LSA
                     // TODO: CP2
+                    
                 } else if (packet->type == PACKET_TYPE_FLOOD) {
                     if (!neighbor_info[port].blocked) {
                         for (uint8_t port_n = 0; port_n <= c.num_neighbors; port_n++) {

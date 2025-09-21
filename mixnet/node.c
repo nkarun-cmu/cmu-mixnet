@@ -34,18 +34,50 @@ typedef struct {
     uint16_t path_len;
 } stp_info;
 
-typedef struct {
-    mixnet_address neighbor_addr;
-    uint16_t cost;
-    //addr_cost* next;
-} addr_cost;
+// typedef struct {
+//     mixnet_address neighbor_addr;
+//     uint16_t cost;
+//     //addr_cost* next;
+// } addr_cost;
 
 typedef struct global_view {
     mixnet_address node_addr;
-    addr_cost* edge_list;
+    mixnet_lsa_link_params* edge_list;
     uint16_t edge_count;
     struct global_view* next;
 } global_view;
+
+typedef struct pq_entry {
+    int distance;
+    mixnet_address source;
+    struct pq_entry* next;
+} pq_entry;
+
+bool pq_empty(pq_entry *pq) {
+    return (pq == NULL);
+}
+
+void push_into_pq(pq_entry *pq, pq_entry *to_add) {
+    to_add->next = pq;
+    pq = to_add;
+}
+
+pq_entry* pop_from_pq(pq_entry *pq) {
+    pq_entry *current = pq;
+    pq_entry *curr_min = pq;
+    while (current != NULL) {
+        if (current->distance < curr_min->distance) {
+            curr_min = current;
+        }
+        current = current->next;
+    }
+    pq_entry *pre_remove = pq;
+    while (pre_remove != curr_min) {
+        pre_remove = pre_remove->next;
+    }
+    pre_remove->next = curr_min->next;
+    return curr_min;
+}
 
 bool node_compare(mixnet_packet_stp* payload, stp_info info) {
     mixnet_address update_root = payload->root_address;
@@ -89,6 +121,10 @@ int send_stp(void *const handle, const struct mixnet_node_config c, stp_info my_
     return 1;
 }
 
+// int send_lsa(void *const handle, const struct mixnet_node_config c, stp_info my_info){
+
+// }
+
 static uint64_t time_now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -109,10 +145,9 @@ global_view* find_in_global_view_list(global_view *p, mixnet_address to_find_add
 
 void add_to_global_view(global_view **p,
                        mixnet_address node_addr,
-                       addr_cost *edges,
+                       mixnet_lsa_link_params *edges,
                        uint16_t count) {
    if (p == NULL) return;
-
 
    global_view *existing = find_in_global_view_list(*p, node_addr);
    if (existing != NULL) {
@@ -137,6 +172,9 @@ void add_to_global_view(global_view **p,
    *p = new_node;
 }
 
+// void compute_shortest_paths(global_view **p, mixnet_address _addr,) {
+//     pq_entry *pq =  malloc(sizeof(p));
+// } 
 
 void run_node(void *const handle,
               volatile bool *const keep_running,
@@ -149,7 +187,7 @@ void run_node(void *const handle,
     uint16_t cost = c.link_costs[4];
     printf("cost: %d\n", cost);
     
-    addr_cost *neighbhor_costs = malloc(sizeof(addr_cost)*(c.num_neighbors-1));
+    mixnet_lsa_link_params *neighbhor_costs = malloc(sizeof(mixnet_lsa_link_params)*(c.num_neighbors-1));
     for (int i = 0; i < c.num_neighbors; i++) {
         neighbhor_costs[i].cost = c.link_costs[i];
     }
@@ -161,7 +199,9 @@ void run_node(void *const handle,
     
     // Timer variables
     uint64_t last_hello_time = time_now();
+    uint64_t start_time = time_now();
     uint64_t last_root_message_time = time_now();
+    bool lsa_done = false;
     
     // printf("running node: %d\n", c.node_addr);
     stp_info my_info = {c.node_addr, c.node_addr, 0};
@@ -213,6 +253,30 @@ void run_node(void *const handle,
             last_root_message_time = current_time;
         }
 
+        //broadcast LSA?
+        if (current_time - start_time >= 500 && !lsa_done) { // TODO: possibly change time interview or ask in OH if better time to send out periodic lsa's
+            for (uint8_t port_n = 0; port_n < c.num_neighbors; port_n++) {
+                if (!neighbor_info[port_n].blocked) {
+                    //send LSA packet
+                    int packet_size = 12 + (4 + (4 * c.num_neighbors));
+                    mixnet_packet *to_send_packet = (mixnet_packet*)malloc(packet_size);
+                    to_send_packet->total_size = packet_size;
+                    to_send_packet->type = PACKET_TYPE_LSA;
+                    
+                    mixnet_packet_lsa* lsa_payload = (mixnet_packet_lsa*)(to_send_packet->payload);
+                    lsa_payload->node_address = c.node_addr;
+                    lsa_payload->neighbor_count = c.num_neighbors;
+                    for (uint16_t i = 0; i < adj_list_start->edge_count; i++) {
+                        lsa_payload->links[i].neighbor_mixaddr = adj_list_start->edge_list[i].neighbor_mixaddr;
+                        lsa_payload->links[i].cost = adj_list_start->edge_list[i].cost;
+                    }
+                    
+                    mixnet_send(handle, port_n, to_send_packet);
+                } 
+            }
+            lsa_done = true;
+        }
+
         mixnet_packet *packet;
         uint8_t port = 0;
         // packet received
@@ -234,7 +298,7 @@ void run_node(void *const handle,
                 if (packet->type == PACKET_TYPE_STP) {
                     mixnet_packet_stp* payload = (mixnet_packet_stp*)(packet->payload);
                     neighbor_info[port].neighbor_addr = payload->node_address;
-                    neighbhor_costs[port].neighbor_addr = payload->node_address;
+                    neighbhor_costs[port].neighbor_mixaddr = payload->node_address;
                     //printf("received stp packet from %d claiming %d is the root with path len %d\n", payload->node_address, payload->root_address, payload->path_length);
                     
                     // Update the time we last received a message from root path
@@ -292,7 +356,34 @@ void run_node(void *const handle,
                     //     printf("link to %d blocked: %s\n", neighbor_info[i].neighbor_addr, neighbor_info[i].blocked ? "true" : "false");
                     // }
                 } else if (packet->type == PACKET_TYPE_LSA) { // PACKET TYPE LSA
-                    // TODO: CP2
+                    //if link not blocked 
+                        //send lsa packets to other unblocked links besides the one that we just heard from
+                    if (!neighbor_info[port].blocked) {
+                        //first update our global view info
+                        mixnet_packet_lsa* payload = (mixnet_packet_lsa*)(packet->payload);
+                        add_to_global_view(&adj_list_start, payload->node_address, payload->links, payload->neighbor_count);
+                        // run dijkstras
+                        //then send our own LSA packet
+                        for (uint8_t port_n = 0; port_n < c.num_neighbors; port_n++) {
+                            if (!neighbor_info[port_n].blocked && port_n != port) {
+                                //send LSA packet
+                                int packet_size = 12 + (4 + (4 * c.num_neighbors));
+                                mixnet_packet *to_send_packet = (mixnet_packet*)malloc(packet_size);
+                                to_send_packet->total_size = packet_size;
+                                to_send_packet->type = PACKET_TYPE_LSA;
+                                
+                                mixnet_packet_lsa* lsa_payload = (mixnet_packet_lsa*)(to_send_packet->payload);
+                                lsa_payload->node_address = c.node_addr;
+                                lsa_payload->neighbor_count = c.num_neighbors;
+                                for (uint16_t i = 0; i < adj_list_start->edge_count; i++) {
+                                    lsa_payload->links[i].neighbor_mixaddr = adj_list_start->edge_list[i].neighbor_mixaddr;
+                                    lsa_payload->links[i].cost = adj_list_start->edge_list[i].cost;
+                                }
+                                
+                                mixnet_send(handle, port_n, to_send_packet);
+                            } 
+                        }
+                    }
                     
                 } else if (packet->type == PACKET_TYPE_FLOOD) {
                     if (!neighbor_info[port].blocked) {

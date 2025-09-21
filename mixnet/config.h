@@ -22,7 +22,7 @@ extern "C" {
 #endif
 
 // Default parameters. TODO(natre): Deprecate.
-#define DEFAULT_ROOT_HELLO_INTERVAL_MS  (100) // we changed this from 100
+#define DEFAULT_ROOT_HELLO_INTERVAL_MS  (500) // we changed this from 100
 #define DEFAULT_REELECTION_INTERVAL_MS  (1000)
 
 // Node configuration

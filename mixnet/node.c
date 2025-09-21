@@ -15,6 +15,7 @@
 #include "connection.h"
 #include "packet.h"
 
+#include <cstdlib>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +48,11 @@ typedef struct global_view {
     struct global_view* next;
 } global_view;
 
+typedef struct {
+    mixnet_address node_addr;
+    uint16_t distance;
+} distance_vector;
+
 typedef struct pq_entry {
     int distance;
     mixnet_address source;
@@ -57,12 +63,12 @@ bool pq_empty(pq_entry *pq) {
     return (pq == NULL);
 }
 
-void push_into_pq(pq_entry *pq, pq_entry *to_add) {
+void pq_push(pq_entry *pq, pq_entry *to_add) {
     to_add->next = pq;
     pq = to_add;
 }
 
-pq_entry* pop_from_pq(pq_entry *pq) {
+pq_entry* pq_pop(pq_entry *pq) {
     pq_entry *current = pq;
     pq_entry *curr_min = pq;
     while (current != NULL) {
@@ -172,9 +178,19 @@ void add_to_global_view(global_view **p,
    *p = new_node;
 }
 
-// void compute_shortest_paths(global_view **p, mixnet_address _addr,) {
-//     pq_entry *pq =  malloc(sizeof(p));
-// } 
+void compute_shortest_paths(global_view *p, mixnet_address src_addr) {
+    global_view *current = p;
+    int count = 0;
+    while (current != NULL) {
+       count++;
+       current = current->next;
+    }
+    pq_entry *pq =  malloc(sizeof(pq_entry));
+    pq->distance = 0;
+    pq->source = src_addr;
+    pq->next = NULL;
+    
+} 
 
 void run_node(void *const handle,
               volatile bool *const keep_running,

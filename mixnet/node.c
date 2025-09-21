@@ -43,6 +43,7 @@ typedef struct {
 typedef struct global_view {
     mixnet_address node_addr;
     addr_cost* edge_list;
+    uint16_t edge_count;
     struct global_view* next;
 } global_view;
 
@@ -94,26 +95,48 @@ static uint64_t time_now(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
-global_view find_in_global_view_list(global_view l, mixnet_address to_find_addr) {
-    global_view current = l
-    while (current != NULL) {
-        if current.node_addr == to_find_addr {
-            return current
-        }
-    }
-    return NULL
+global_view* find_in_global_view_list(global_view *p, mixnet_address to_find_addr) {
+   global_view *current = p;
+   while (current != NULL) {
+       if (current->node_addr == to_find_addr) {
+           return current;
+       }
+       current = current->next;
+   }
+   return NULL;
 }
 
-bool add_to_list(global_view l, mixnet_address node_addr, addr_cost *edge_list) {
-    if find_in_global_view_list(l, node_addr) == NULL { // does not currently exist in global view
-        global_view* new_global_node = malloc(sizeof(global_view));
-        new_global_node.edge_list = edge_list;
-        new_global_node.node_addr = node_addr
-        // ADD POINTER TO NEXT
-    }
-    return true;
-    // global_view current =
+
+void add_to_global_view(global_view **p,
+                       mixnet_address node_addr,
+                       addr_cost *edges,
+                       uint16_t count) {
+   if (p == NULL) return;
+
+
+   global_view *existing = find_in_global_view_list(*p, node_addr);
+   if (existing != NULL) {
+       if (existing->edge_list != NULL) {
+        free(existing->edge_list);
+       }
+       existing->edge_list = edges;
+       existing->edge_count = count;
+       return;
+   }
+
+
+   global_view *new_node = malloc(sizeof(global_view));
+   if (!new_node) {
+       free(edges);
+       return;
+   }
+   new_node->node_addr = node_addr;
+   new_node->edge_list = edges;
+   new_node->edge_count = count;
+   new_node->next = *p;
+   *p = new_node;
 }
+
 
 void run_node(void *const handle,
               volatile bool *const keep_running,
@@ -133,6 +156,7 @@ void run_node(void *const handle,
     global_view *adj_list_start = malloc(sizeof(global_view)); //will start with pointer to our own list
     adj_list_start->node_addr = c.node_addr;
     adj_list_start->edge_list = neighbhor_costs;
+    adj_list_start->edge_count = c.num_neighbors;
     adj_list_start->next = NULL;
     
     // Timer variables

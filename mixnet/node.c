@@ -240,61 +240,104 @@ void print_in_global_view_list(global_view *p, mixnet_address node_addr) {
     printf("PRINTING %d global_view \n", node_addr);
     global_view *current = p;
     while (current != NULL) {
-        printf("global_view node: %d\n", current->node_addr);
-        printf("    %d edge count: %d\n", current->node_addr, current->edge_count);
-        printf("    %d path len: %d\n", current->node_addr, current->path_size);
-        printf("    %d distance: %d\n", current->node_addr, current->distance);
-        printf("    path to %d: [", current->node_addr);
-        path_component *start = current->path;
-        while (start != NULL) {
-            printf("%d ", start->node);
-            start = start->next;
-        }
-        printf("]\n");
+        // printf("global_view node: %d\n", current->node_addr);
+        // printf("    %d edge count: %d\n", current->node_addr, current->edge_count);
+        // printf("    %d edge list: [", current->node_addr);
+        // for (int i= 0; i < current->edge_count; i++) {
+        //     printf("%d ", current->edge_list[i].neighbor_mixaddr);
+        // }
+        // printf("]\n");
+        // printf("    %d path len: %d\n", current->node_addr, current->path_size);
+        // printf("    %d distance: %d\n", current->node_addr, current->distance);
+        // printf("    path to %d: [", current->node_addr);
+        // path_component *start = current->path;
+        // while (start != NULL) {
+        //     printf("%d ", start->node);
+        //     start = start->next;
+        // }
+        // printf("]\n");
         current = current->next;
     }
 }
 
-
-// In node.c, replace your existing add_to_global_view function
-
 void add_to_global_view(global_view **p,
                       mixnet_address node_addr,
-                      const mixnet_lsa_link_params *edges, // Make const for safety
+                      mixnet_lsa_link_params *edges,
                       uint16_t count) {
-    if (p == NULL || edges == NULL) return;
+    if (p == NULL) return;
 
-    // Allocate new memory for the edge list and copy the data
-    size_t edges_size = sizeof(mixnet_lsa_link_params) * count;
-    mixnet_lsa_link_params* edges_copy = (mixnet_lsa_link_params*)malloc(edges_size);
-    if (!edges_copy) return; // Malloc failed
-    memcpy(edges_copy, edges, edges_size);
 
     global_view *existing = find_in_global_view_list(*p, node_addr);
     if (existing != NULL) {
+        printf("node already exists\n");
         if (existing->edge_list != NULL) {
-            free(existing->edge_list); // Free the old list to prevent a leak
+            // free(existing->edge_list);
         }
-        existing->edge_list = edges_copy; // Store the pointer to our new copy
+        existing->edge_list = edges;
         existing->edge_count = count;
         return;
     }
 
-    global_view *new_node = (global_view*)malloc(sizeof(global_view));
+    global_view *new_node = malloc(sizeof(global_view));
     if (!new_node) {
-        free(edges_copy); // Clean up if the next malloc fails
+    //    free(edges);
         return;
     }
     new_node->node_addr = node_addr;
-    new_node->edge_list = edges_copy; // Store the pointer to our new copy
-    new_node->edge_count = count;
+    new_node->edge_list = edges;
     new_node->distance = (uint16_t)INT_MAX;
-    new_node->path = NULL; // Initialize all fields
-    new_node->path_size = 0;
-    new_node->first_hop_addr = INVALID_MIXADDR;
+    new_node->edge_count = count;
+    printf("%d original edge list: [", node_addr);
+        for (int i= 0; i < count; i++) {
+            printf("%d ", edges[i].neighbor_mixaddr);
+        }
+    printf("]\n");
+    printf("%d new edge list: [", node_addr);
+        for (int i= 0; i < new_node->edge_count; i++) {
+            printf("%d ", new_node->edge_list[i].neighbor_mixaddr);
+        }
+    printf("]\n");
     new_node->next = *p;
     *p = new_node;
 }
+
+// void add_to_global_view(global_view **p,
+//                       mixnet_address node_addr,
+//                       const mixnet_lsa_link_params *edges, // Make const for safety
+//                       uint16_t count) {
+//     if (p == NULL || edges == NULL) return;
+
+//     // Allocate new memory for the edge list and copy the data
+//     size_t edges_size = sizeof(mixnet_lsa_link_params) * count;
+//     mixnet_lsa_link_params* edges_copy = (mixnet_lsa_link_params*)malloc(edges_size);
+//     if (!edges_copy) return; // Malloc failed
+//     memcpy(edges_copy, edges, edges_size);
+
+//     global_view *existing = find_in_global_view_list(*p, node_addr);
+//     if (existing != NULL) {
+//         if (existing->edge_list != NULL) {
+//             free(existing->edge_list); // Free the old list to prevent a leak
+//         }
+//         existing->edge_list = edges_copy; // Store the pointer to our new copy
+//         existing->edge_count = count;
+//         return;
+//     }
+
+//     global_view *new_node = (global_view*)malloc(sizeof(global_view));
+//     if (!new_node) {
+//         free(edges_copy); // Clean up if the next malloc fails
+//         return;
+//     }
+//     new_node->node_addr = node_addr;
+//     new_node->edge_list = edges_copy; // Store the pointer to our new copy
+//     new_node->edge_count = count;
+//     new_node->distance = (uint16_t)INT_MAX;
+//     new_node->path = NULL; // Initialize all fields
+//     new_node->path_size = 0;
+//     new_node->first_hop_addr = INVALID_MIXADDR;
+//     new_node->next = *p;
+//     *p = new_node;
+// }
 
 void compute_shortest_paths(global_view *p, mixnet_address src_addr) {
     printf("%d computing shortest paths\n", src_addr);
@@ -360,17 +403,19 @@ void compute_shortest_paths(global_view *p, mixnet_address src_addr) {
             if (new_dist < old_dist) {
                 should_update = true;
             } else if (new_dist == old_dist) {
-                printf("        tie break\n");
-                mixnet_address new_first_hop;
-                if (u_node->node_addr == src_addr) {
-                    new_first_hop = v_addr;
-                } else {
-                    new_first_hop = u_node->first_hop_addr;
+                mixnet_address check = u_node->node_addr;
+                const path_component* current = v_node->path;
+                bool do_up = true;
+                if (current == NULL) {
+                    do_up = false;
                 }
-                if (new_first_hop < v_node->first_hop_addr) {
+                while (do_up && current->next != NULL) {
+                    current = current->next;
+                }
+                if (do_up && check < current->node) {
                     should_update = true;
                 }
-            }
+            }   
 
 
             // In compute_shortest_paths(), inside the if (should_update) block
@@ -602,10 +647,14 @@ void run_node(void *const handle,
                     lsa_payload->node_address = c.node_addr;
                     lsa_payload->neighbor_count = c.num_neighbors;
                     for (uint16_t i = 0; i < c.num_neighbors; i++) {
-                        lsa_payload->links[i].neighbor_mixaddr = adj_list_start->edge_list[i].neighbor_mixaddr;
-                        lsa_payload->links[i].cost = adj_list_start->edge_list[i].cost;
+                        lsa_payload->links[i].neighbor_mixaddr = neighbhor_costs[i].neighbor_mixaddr;
+                        lsa_payload->links[i].cost = neighbhor_costs[i].cost;
                     }
-                    
+                    printf("%d new LSA edge list: [", c.node_addr);
+                    for (int i= 0; i < lsa_payload->neighbor_count; i++) {
+                        printf("%d ", lsa_payload->links[i].neighbor_mixaddr);
+                    }
+                    printf("]\n");
                     mixnet_send(handle, port_n, to_send_packet);
                 }
             }
@@ -640,15 +689,14 @@ void run_node(void *const handle,
 
                     if (packet->type == PACKET_TYPE_DATA) {
                         mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
-                        printf("user sending data packet from %d to %d\n", c.node_addr, payload->dst_address);
-                        print_in_global_view_list(adj_list_start, c.node_addr);
+                        // printf("user sending data packet from %d to %d\n", c.node_addr, payload->dst_address);
+                        // print_in_global_view_list(adj_list_start, c.node_addr);
                         global_view* destination_node = find_in_global_view_list(adj_list_start, payload->dst_address);
 
-                        if (destination_node != NULL && destination_node->path != NULL) {
+                        if (destination_node != NULL && destination_node->distance != (uint16_t)INT_MAX) {
                             new_packet = create_forwarding_packet(packet, destination_node->path, destination_node->path_size);
-                            
                             // Find the port for the first hop
-                            mixnet_address first_hop_addr = destination_node->path->node;
+                            mixnet_address first_hop_addr = destination_node->first_hop_addr;
                             for (int i = 0; i < c.num_neighbors; i++) {
                                 if (neighbor_info[i].neighbor_addr == first_hop_addr) {
                                     forward_to = i;
@@ -657,6 +705,7 @@ void run_node(void *const handle,
                             }
                         }
                     }
+
                     else { // PACKET_TYPE_PING logic would go here 
                     }
 
@@ -829,151 +878,3 @@ void run_node(void *const handle,
     //// // printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);
     // free(neighbor_info);
 }
-
-// 15 computing shortest paths
-// PRINTING 15 global_view 
-//     global_view node: 0
-//         0 edge count: 2
-//         0 path len: 0
-//         0 distance: 65535
-//         path to 0: []
-//     global_view node: 21
-//         21 edge count: 2
-//         21 path len: 0
-//         21 distance: 65535
-//         path to 21: []
-//     global_view node: 42
-//         42 edge count: 2
-//         42 path len: 0
-//         42 distance: 65535
-//     path to 42: []
-//         global_view node: 65534
-//         65534 edge count: 2
-//         65534 path len: 0
-//         65534 distance: 65535
-//         path to 65534: []
-//     global_view node: 81
-//         81 edge count: 2
-//         81 path len: 0
-//         81 distance: 65535
-//         path to 81: []
-//     global_view node: 31
-//         31 edge count: 2
-//         31 path len: 0
-//         31 distance: 65535
-//         path to 31: []
-//     global_view node: 15
-//         15 edge count: 2
-//         15 path len: 0
-//         15 distance: 0
-//         path to 15: []
-// u: 15
-//     v: 31
-//         dist[v]: 65535
-//         dist[u] + weight: 1
-//         update
-//         size of path to u: 0
-//         path to 15: []
-//         dist[v]: 1
-//         size of path to v: 0
-//         path to 31: []
-//     v: 42
-//         dist[v]: 65535
-//         dist[u] + weight: 1
-//         update
-//         size of path to u: 0
-//         path to 15: []
-//         dist[v]: 1
-//         size of path to v: 0
-//         path to 42: []
-// u: 42
-//     v: 21
-//         dist[v]: 65535
-//         dist[u] + weight: 2
-//         update
-//         size of path to u: 0
-//         path to 42: []
-//         dist[v]: 2
-//         size of path to v: 1
-//         path to 21: [42] 
-//     v: 15
-//     dist[v]: 0
-//     dist[u] + weight: 2
-// u: 31
-//     v: 15
-//         dist[v]: 0
-//         dist[u] + weight: 2
-//     v: 65534
-//         dist[v]: 65535
-//         dist[u] + weight: 2
-//         update
-//         size of path to u: 0
-//         path to 31: []
-//         dist[v]: 2
-//         size of path to v: 1
-//         path to 65534: [31] 
-// u: 65534
-//     v: 0
-//         dist[v]: 65535
-//         dist[u] + weight: 3
-//         update
-//         size of path to u: 1
-//         path to 65534: [31] 
-//         dist[v]: 3
-//         size of path to v: 2
-//         path to 0: [31 65534]
-//     v: 21
-//         dist[v]: 2
-//         dist[u] + weight: 3
-// u: 21
-//     v: 0
-//         dist[v]: 3
-//         dist[u] + weight: 3
-//         tie break
-//     v: 21
-//         dist[v]: 2
-//         dist[u] + weight: 3
-// u: 0
-//     v: 0
-//         dist[v]: 3
-//         dist[u] + weight: 4
-//     v: 21
-//         dist[v]: 2
-//         dist[u] + weight: 4
-// 15 shortest paths computed
-// PRINTING 15 global_view 
-//     global_view node: 0
-//         0 edge count: 2
-//         0 path len: 2
-//         0 distance: 3
-//         path to 0: [31 65534] 
-//     global_view node: 21
-//         21 edge count: 2
-//         21 path len: 1
-//         21 distance: 2
-//         path to 21: [42] 
-//     global_view node: 42
-//         42 edge count: 2
-//         42 path len: 0
-//         42 distance: 1
-//         path to 42: []
-//     global_view node: 65534
-//         65534 edge count: 2
-//         65534 path len: 1
-//         65534 distance: 2
-//         path to 65534: [31] 
-//     global_view node: 81
-//         81 edge count: 2
-//         81 path len: 0
-//         81 distance: 65535
-//         path to 81: []
-//     global_view node: 31
-//         31 edge count: 2
-//         31 path len: 0
-//         31 distance: 1
-//         path to 31: []
-//     global_view node: 15
-//         15 edge count: 2
-//         15 path len: 0
-//         15 distance: 0
-//         path to 15: []

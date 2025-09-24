@@ -492,48 +492,50 @@ mixnet_packet* create_forwarding_packet(
     const path_component* path,
     uint16_t path_len)
 {
-    // printf("inside create_forwarding_packet\n");
     mixnet_packet_routing_header* src_rh = (mixnet_packet_routing_header*)(src_packet->payload);
-    size_t old_data_size = src_packet->total_size - sizeof(mixnet_packet) - sizeof(src_rh);
     
-    //size_t new_rh_size = sizeof(mixnet_packet_routing_header) + (path_len * sizeof(mixnet_address));
-    //size_t old_data_size = src_packet->total_size - sizeof(mixnet_packet) - sizeof(mixnet_packet_routing_header);
-    //size_t new_total_size = sizeof(mixnet_packet) + new_rh_size + old_data_size;
+    size_t old_payload_size = 0;
+    const char* old_payload_ptr = NULL;
 
-    size_t new_rh_size = 2 * path_len + 8;
-    size_t new_total_size = sizeof(mixnet_packet) + new_rh_size + old_data_size;
+    if (src_packet->type == PACKET_TYPE_DATA) {
+        old_payload_size = src_packet->total_size - sizeof(mixnet_packet) - sizeof(mixnet_packet_routing_header);
+        old_payload_ptr = (const char*)src_rh + sizeof(mixnet_packet_routing_header);
+    } else if (src_packet->type == PACKET_TYPE_PING) {
+        old_payload_size = sizeof(mixnet_packet_ping);
+    }
+
+    size_t new_rh_size = sizeof(mixnet_packet_routing_header) + (path_len * sizeof(mixnet_address));
+    size_t new_total_size = sizeof(mixnet_packet) + new_rh_size + old_payload_size;
 
     mixnet_packet* new_packet = (mixnet_packet*)malloc(new_total_size);
+    if (new_packet == NULL) return NULL;
 
-    //memcpy(new_packet, src_packet, sizeof(mixnet_packet));
     new_packet->total_size = new_total_size;
-    new_packet->type = PACKET_TYPE_DATA;
+    new_packet->type = src_packet->type;
     
-   //mixnet_packet_routing_header* old_rh = (mixnet_packet_routing_header*)(src_packet->payload);
     mixnet_packet_routing_header* new_rh = (mixnet_packet_routing_header*)(new_packet->payload);
-    
-    // const char* old_data = (const char*)old_rh + sizeof(mixnet_packet_routing_header);
-    // char* new_data = (char*)new_rh + new_rh_size; 
-    const char* old_data = (const char*)src_rh + 8;
-    char* new_data = (char*)new_rh + new_rh_size; 
+    char* new_payload_ptr = (char*)new_rh + new_rh_size; 
 
     new_rh->src_address = src_rh->src_address;
     new_rh->dst_address = src_rh->dst_address;
     new_rh->route_length = path_len;
     new_rh->hop_index = 0;
 
-    path_component* current_hop = (path_component*)path;
+    const path_component* current_hop = path;
     for (int i = 0; i < path_len; i++) {
-        if (current_hop == NULL) {
-            break;
-        }
+        if (current_hop == NULL) break;
         new_rh->route[i] = current_hop->node;
         current_hop = current_hop->next;
     }
-    // printf("done with route loop\n");
-    if (old_data_size > 0) {
-        memcpy(new_data, old_data, old_data_size);
-    }    
+    
+    if (new_packet->type == PACKET_TYPE_PING) {
+        mixnet_packet_ping* ping_payload = (mixnet_packet_ping*)new_payload_ptr;
+        ping_payload->is_request = true;
+        ping_payload->send_time = time_now();
+    } else if (old_payload_size > 0) {
+        memcpy(new_payload_ptr, old_payload_ptr, old_payload_size);
+    }
+    
     return new_packet;
 }
 
@@ -714,6 +716,7 @@ void run_node(void *const handle,
 
                     if (packet->type == PACKET_TYPE_DATA) {
                         mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
+                        payload->src_address = c.node_addr;
                         //printf("user sending data packet from %d to %d\n", c.node_addr, payload->dst_address);
                         // print_in_global_view_list(adj_list_start, c.node_addr);
                         global_view* destination_node = find_in_global_view_list(adj_list_start, payload->dst_address);
@@ -725,7 +728,22 @@ void run_node(void *const handle,
                             } else {
                                 new_packet = create_forwarding_packet(packet, destination_node->path, destination_node->path_size);
                             }
-                            // Find the port for the first hop
+                            mixnet_address first_hop_addr = destination_node->first_hop_addr;
+                            for (int i = 0; i < c.num_neighbors; i++) {
+                                if (neighbor_info[i].neighbor_addr == first_hop_addr) {
+                                    forward_to = i;
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
+                        payload->src_address = c.node_addr;  // Add this line!
+                        global_view* destination_node = find_in_global_view_list(adj_list_start, payload->dst_address);
+                        
+                        if (destination_node != NULL && destination_node->distance != (uint16_t)INT_MAX) {
+                            new_packet = create_forwarding_packet(packet, destination_node->path, destination_node->path_size);
+                            
                             mixnet_address first_hop_addr = destination_node->first_hop_addr;
                             for (int i = 0; i < c.num_neighbors; i++) {
                                 if (neighbor_info[i].neighbor_addr == first_hop_addr) {
@@ -736,19 +754,22 @@ void run_node(void *const handle,
                         }
                     }
 
-                    else { // PACKET_TYPE_PING logic would go here 
-                    }
-
                     if (new_packet != NULL && forward_to != (uint16_t)-1) {
-                        mix_packets[packet_counter].packet = new_packet;
-                        mix_packets[packet_counter].port = forward_to;
-                        packet_counter++;
+                        if (packet->type == PACKET_TYPE_PING) {
+                            // Send PING packets immediately without mixing
+                            mixnet_send(handle, forward_to, new_packet);
+                        } else {
+                            // Only DATA packets go through mixing
+                            mix_packets[packet_counter].packet = new_packet;
+                            mix_packets[packet_counter].port = forward_to;
+                            packet_counter++;
 
-                        if (packet_counter >= c.mixing_factor) {
-                            for (uint16_t i = 0; i < packet_counter; i++) {
-                                mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
+                            if (packet_counter >= c.mixing_factor) {
+                                for (uint16_t i = 0; i < packet_counter; i++) {
+                                    mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
+                                }
+                                packet_counter = 0;
                             }
-                            packet_counter = 0;
                         }
                     }
                 }
@@ -841,6 +862,17 @@ void run_node(void *const handle,
                             }
                         }
                         compute_shortest_paths(adj_list_start, c.node_addr);
+                        global_view* curr = adj_list_start;
+                        while (curr != NULL) {
+                            printf("Node %d: Path to %d: ", c.node_addr, curr->node_addr);
+                            path_component* p = curr->path;
+                            while (p != NULL) {
+                                printf("%d ", p->node);
+                                p = p->next;
+                            }
+                            printf("(first_hop: %d)\n", curr->first_hop_addr);
+                            curr = curr->next;
+                        }
                     }
                 } else if (packet->type == PACKET_TYPE_FLOOD) {
                     if (!neighbor_info[port].blocked) {
@@ -857,24 +889,58 @@ void run_node(void *const handle,
                } else { // DATA or PING packet for forwarding or destination
                     mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
                     //printf("%d receiving data/ping packet\n", c.node_addr);
-                    if (payload->dst_address == c.node_addr) {
-                        forward_packet(handle, c.num_neighbors, packet);                    
+                   if (payload->dst_address == c.node_addr) { // Packet is for me
+                        if (packet->type == PACKET_TYPE_PING) {
+                            size_t rh_size = sizeof(mixnet_packet_routing_header) + (payload->route_length * sizeof(mixnet_address));
+                            mixnet_packet_ping* ping_payload = (mixnet_packet_ping*)((char*)payload + rh_size);
+
+                            if (ping_payload->is_request) {
+                                for(int i = 0; i < payload->route_length / 2; i++) {
+                                    mixnet_address temp = payload->route[i];
+                                    payload->route[i] = payload->route[payload->route_length - 1 - i];
+                                    payload->route[payload->route_length - 1 - i] = temp;
+                                }
+                                mixnet_address temp_addr = payload->src_address;
+                                payload->src_address = payload->dst_address;
+                                payload->dst_address = temp_addr;
+                                payload->hop_index = 0;
+                                ping_payload->is_request = false;
+                                
+                                mixnet_address next_hop_addr = (payload->route_length > 0) ? payload->route[0] : payload->dst_address;
+
+                                uint16_t forward_to = (uint16_t)-1;
+                                for (int i = 0; i < c.num_neighbors; i++) {
+                                    if (neighbor_info[i].neighbor_addr == next_hop_addr) {
+                                        forward_to = i;
+                                        break;
+                                    }
+                                }
+                                if (forward_to != (uint16_t)-1) {
+                                    // Send PING response immediately without mixing
+                                    mixnet_send(handle, forward_to, packet);
+                                }
+                            } else {
+                                uint64_t rtt = time_now() - ping_payload->send_time;
+                                printf("RTT %d:%d is %lu\n", payload->src_address, payload->dst_address, rtt);
+                            }
+                        } else { // It's a DATA packet for me, send to user
+                            forward_packet(handle, c.num_neighbors, packet);
+                            // NOTE: Do not set packet=NULL here, to avoid a memory leak.
+                        }                               
                     } else {
-                        mixnet_packet* new_packet = (mixnet_packet*)malloc(packet->total_size);
-                        if (new_packet == NULL) { return; }
-                        memcpy(new_packet, packet, packet->total_size);
-                        
-                        mixnet_packet_routing_header* new_payload = (mixnet_packet_routing_header*)(new_packet->payload);
+                        mixnet_packet_routing_header* received_rh = (mixnet_packet_routing_header*)(packet->payload);
 
-                        new_payload->hop_index++;
-
+                        // Determine the next hop based on the *current* hop_index
+                        uint16_t current_hop_index = received_rh->hop_index;
                         mixnet_address next_hop_addr;
-                        if (new_payload->hop_index < new_payload->route_length) {
-                            next_hop_addr = new_payload->route[new_payload->hop_index];
+
+                        if (current_hop_index + 1 < received_rh->route_length) {
+                            next_hop_addr = received_rh->route[current_hop_index + 1];
                         } else {
-                            next_hop_addr = new_payload->dst_address;
+                            next_hop_addr = received_rh->dst_address;
                         }
 
+                        // Find the port corresponding to the next hop address
                         uint16_t forward_to = (uint16_t)-1;
                         for (int i = 0; i < c.num_neighbors; i++) {
                             if (neighbor_info[i].neighbor_addr == next_hop_addr) {
@@ -882,20 +948,27 @@ void run_node(void *const handle,
                                 break;
                             }
                         }
-                        if (forward_to != (uint16_t)-1) {
-                            mix_packets[packet_counter].packet = new_packet;
-                            mix_packets[packet_counter].port = forward_to;
-                            packet_counter++;
 
-                            if (packet_counter >= c.mixing_factor) {
-                                for (uint16_t i = 0; i < packet_counter; i++) {
-                                    //printf("%d sending data/ping packet to %d\n", c.node_addr, neighbor_info[mix_packets[i].port].neighbor_addr);
-                                    mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
+                        if (forward_to != (uint16_t)-1) {
+                            mixnet_packet* packet_to_send = (mixnet_packet*)malloc(packet->total_size);
+                            memcpy(packet_to_send, packet, packet->total_size);
+                            mixnet_packet_routing_header* outgoing_rh = (mixnet_packet_routing_header*)(packet_to_send->payload);
+                            outgoing_rh->hop_index++;
+
+                            if (packet->type == PACKET_TYPE_PING) {
+                                mixnet_send(handle, forward_to, packet_to_send);
+                            } else {
+                                mix_packets[packet_counter].packet = packet_to_send;
+                                mix_packets[packet_counter].port = forward_to;
+                                packet_counter++;
+
+                                if (packet_counter >= c.mixing_factor) {
+                                    for (uint16_t i = 0; i < packet_counter; i++) {
+                                        mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
+                                    }
+                                    packet_counter = 0;
                                 }
-                                packet_counter = 0;
                             }
-                        } else {
-                            free(new_packet);
                         }
                     }
                 }

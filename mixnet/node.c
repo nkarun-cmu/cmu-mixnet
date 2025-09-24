@@ -456,7 +456,8 @@ void compute_random_paths(global_view *p, mixnet_address src_addr, global_view* 
     if (self->edge_count > 1) {
         int num = (rand() % (2 - 1 + 1)) + 1;
         //printf("num: %d\n", num);
-            if (num % 2 == 0) {
+        //num % 2 == 0
+            if (num == 2) {
                 mixnet_address neighbor = 0;
                 for (uint16_t i = 0; i < self->edge_count; i++) {
                     if (self->edge_list[i].neighbor_mixaddr != dest_node->node_addr) {
@@ -528,10 +529,13 @@ mixnet_packet* create_forwarding_packet(
         current_hop = current_hop->next;
     }
     
-    if (new_packet->type == PACKET_TYPE_PING) {
+    if (new_packet->type == PACKET_TYPE_PING) { // TODO: ask at OH what send time should be
+        mixnet_packet_ping* src_payload = (mixnet_packet_ping*)(src_packet->payload);
+        //mixnet_packet_ping* ping_payload = (mixnet_packet_ping*)new_payload_ptr;
+        //memcpy(ping_payload, src_payload, old_payload_size);
         mixnet_packet_ping* ping_payload = (mixnet_packet_ping*)new_payload_ptr;
         ping_payload->is_request = true;
-        ping_payload->send_time = time_now();
+        ping_payload->send_time = src_payload->send_time;
     } else if (old_payload_size > 0) {
         memcpy(new_payload_ptr, old_payload_ptr, old_payload_size);
     }
@@ -588,10 +592,11 @@ void run_node(void *const handle,
     uint64_t last_root_message_time = time_now();
     bool lsa_done = false;
 
-    //printf("running node: %d\n", c.node_addr);
-    //printf("num neigbors: %d\n", c.num_neighbors);
+    printf("running node: %d\n", c.node_addr);
+    printf("num neigbors: %d\n", c.num_neighbors);
     stp_info my_info = {c.node_addr, c.node_addr, 0};
     neighbor_state_t *neighbor_info = (neighbor_state_t*)calloc(c.num_neighbors, sizeof(neighbor_state_t));
+    
 
 
     for (int i = 0; i < c.num_neighbors; i++) {
@@ -736,7 +741,7 @@ void run_node(void *const handle,
                                 }
                             }
                         }
-                    } else {
+                    } else { // PACKET TYPE PING
                         mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
                         payload->src_address = c.node_addr;
                         global_view* destination_node = find_in_global_view_list(adj_list_start, payload->dst_address);
@@ -763,18 +768,16 @@ void run_node(void *const handle,
                                 printf("%d ", rh->route[i]);
                             }
                             printf("\n");
-                        } else {
-                            // Only DATA packets go through mixing
-                            mix_packets[packet_counter].packet = new_packet;
-                            mix_packets[packet_counter].port = forward_to;
-                            packet_counter++;
+                        } 
+                        mix_packets[packet_counter].packet = new_packet;
+                        mix_packets[packet_counter].port = forward_to;
+                        packet_counter++;
 
-                            if (packet_counter >= c.mixing_factor) {
-                                for (uint16_t i = 0; i < packet_counter; i++) {
-                                    mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
-                                }
-                                packet_counter = 0;
+                        if (packet_counter >= c.mixing_factor) {
+                            for (uint16_t i = 0; i < packet_counter; i++) {
+                                mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
                             }
+                            packet_counter = 0;
                         }
                     }
                 }
@@ -867,17 +870,17 @@ void run_node(void *const handle,
                             }
                         }
                         compute_shortest_paths(adj_list_start, c.node_addr);
-                        global_view* curr = adj_list_start;
-                        while (curr != NULL) {
-                            printf("Node %d: Path to %d: ", c.node_addr, curr->node_addr);
-                            path_component* p = curr->path;
-                            while (p != NULL) {
-                                printf("%d ", p->node);
-                                p = p->next;
-                            }
-                            printf("(first_hop: %d)\n", curr->first_hop_addr);
-                            curr = curr->next;
-                        }
+                        // global_view* curr = adj_list_start;
+                        // while (curr != NULL) {
+                        //     printf("Node %d: Path to %d: ", c.node_addr, curr->node_addr);
+                        //     path_component* p = curr->path;
+                        //     while (p != NULL) {
+                        //         printf("%d ", p->node);
+                        //         p = p->next;
+                        //     }
+                        //     printf("(first_hop: %d)\n", curr->first_hop_addr);
+                        //     curr = curr->next;
+                        // }
                     }
                 } else if (packet->type == PACKET_TYPE_FLOOD) {
                     if (!neighbor_info[port].blocked) {
@@ -893,13 +896,16 @@ void run_node(void *const handle,
                     }
                } else { // DATA or PING packet for forwarding or destination
                     mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
-                    //printf("%d receiving data/ping packet\n", c.node_addr);
+                    printf("%d receiving data/ping packet from %d\n", c.node_addr, neighbor_info[port].neighbor_addr);
+                    printf("    must forward from %d to %d\n", payload->src_address, payload->dst_address);
                    if (payload->dst_address == c.node_addr) { // Packet is for me
                         if (packet->type == PACKET_TYPE_PING) {
                             size_t rh_size = sizeof(mixnet_packet_routing_header) + (payload->route_length * sizeof(mixnet_address));
                             mixnet_packet_ping* ping_payload = (mixnet_packet_ping*)((char*)payload + rh_size);
                             printf("[Node %d] receiving ping from %d. is_request: %d. hop_index: %d\n", c.node_addr, payload->src_address, ping_payload->is_request, payload->hop_index);
-
+                            printf("forwarding to user\n");
+                            forward_packet(handle, c.num_neighbors, packet);
+                            //mixnet_send(handle, c.num_neighbors, packet);
 
                             if (ping_payload->is_request) {
                                 for(int i = 0; i < payload->route_length / 2; i++) {
@@ -929,12 +935,15 @@ void run_node(void *const handle,
                                 uint64_t rtt = time_now() - ping_payload->send_time;
                                 printf("RTT %d:%d is %lu\n", payload->src_address, payload->dst_address, rtt);
                             }
+                            //forward_packet(handle, c.num_neighbors, packet);
+                            //mixnet_send(handle, c.num_neighbors, packet);
                         } else { // It's a DATA packet for me, send to user
+                            printf("forwarding to user\n");
                             forward_packet(handle, c.num_neighbors, packet);
                         }                               
                     } else {
                         mixnet_packet_routing_header* received_rh = (mixnet_packet_routing_header*)(packet->payload);
-
+                        //printf("[Node %d] forwarding ping from %d. is_request: %d. hop_index: %d\n", c.node_addr, received_rh->src_address, received_rh->is_request, received_rh->hop_index);
                         uint16_t current_hop_index = received_rh->hop_index;
                         mixnet_address next_hop_addr;
 
@@ -957,20 +966,16 @@ void run_node(void *const handle,
                             memcpy(packet_to_send, packet, packet->total_size);
                             mixnet_packet_routing_header* outgoing_rh = (mixnet_packet_routing_header*)(packet_to_send->payload);
                             outgoing_rh->hop_index++;
+                            
+                            mix_packets[packet_counter].packet = packet_to_send;
+                            mix_packets[packet_counter].port = forward_to;
+                            packet_counter++;
 
-                            if (packet->type == PACKET_TYPE_PING) {
-                                mixnet_send(handle, forward_to, packet_to_send);
-                            } else {
-                                mix_packets[packet_counter].packet = packet_to_send;
-                                mix_packets[packet_counter].port = forward_to;
-                                packet_counter++;
-
-                                if (packet_counter >= c.mixing_factor) {
-                                    for (uint16_t i = 0; i < packet_counter; i++) {
-                                        mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
-                                    }
-                                    packet_counter = 0;
+                            if (packet_counter >= c.mixing_factor) {
+                                for (uint16_t i = 0; i < packet_counter; i++) {
+                                    mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
                                 }
+                                packet_counter = 0;
                             }
                         }
                     }

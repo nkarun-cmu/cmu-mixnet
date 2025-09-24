@@ -738,7 +738,7 @@ void run_node(void *const handle,
                         }
                     } else {
                         mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
-                        payload->src_address = c.node_addr;  // Add this line!
+                        payload->src_address = c.node_addr;
                         global_view* destination_node = find_in_global_view_list(adj_list_start, payload->dst_address);
                         
                         if (destination_node != NULL && destination_node->distance != (uint16_t)INT_MAX) {
@@ -755,9 +755,14 @@ void run_node(void *const handle,
                     }
 
                     if (new_packet != NULL && forward_to != (uint16_t)-1) {
-                        if (packet->type == PACKET_TYPE_PING) {
-                            // Send PING packets immediately without mixing
-                            mixnet_send(handle, forward_to, new_packet);
+                        // Inside the user port block, after creating the PING packet
+                        if (new_packet->type == PACKET_TYPE_PING) {
+                            mixnet_packet_routing_header* rh = (mixnet_packet_routing_header*)(new_packet->payload);
+                            printf("[Node %d] creating pring request to %d. route length: %d. rout: ", c.node_addr, rh->dst_address, rh->route_length);
+                            for (int i = 0; i < rh->route_length; i++) {
+                                printf("%d ", rh->route[i]);
+                            }
+                            printf("\n");
                         } else {
                             // Only DATA packets go through mixing
                             mix_packets[packet_counter].packet = new_packet;
@@ -893,6 +898,8 @@ void run_node(void *const handle,
                         if (packet->type == PACKET_TYPE_PING) {
                             size_t rh_size = sizeof(mixnet_packet_routing_header) + (payload->route_length * sizeof(mixnet_address));
                             mixnet_packet_ping* ping_payload = (mixnet_packet_ping*)((char*)payload + rh_size);
+                            printf("[Node %d] receiving ping from %d. is_request: %d. hop_index: %d\n", c.node_addr, payload->src_address, ping_payload->is_request, payload->hop_index);
+
 
                             if (ping_payload->is_request) {
                                 for(int i = 0; i < payload->route_length / 2; i++) {
@@ -916,7 +923,6 @@ void run_node(void *const handle,
                                     }
                                 }
                                 if (forward_to != (uint16_t)-1) {
-                                    // Send PING response immediately without mixing
                                     mixnet_send(handle, forward_to, packet);
                                 }
                             } else {
@@ -925,12 +931,10 @@ void run_node(void *const handle,
                             }
                         } else { // It's a DATA packet for me, send to user
                             forward_packet(handle, c.num_neighbors, packet);
-                            // NOTE: Do not set packet=NULL here, to avoid a memory leak.
                         }                               
                     } else {
                         mixnet_packet_routing_header* received_rh = (mixnet_packet_routing_header*)(packet->payload);
 
-                        // Determine the next hop based on the *current* hop_index
                         uint16_t current_hop_index = received_rh->hop_index;
                         mixnet_address next_hop_addr;
 
@@ -940,7 +944,6 @@ void run_node(void *const handle,
                             next_hop_addr = received_rh->dst_address;
                         }
 
-                        // Find the port corresponding to the next hop address
                         uint16_t forward_to = (uint16_t)-1;
                         for (int i = 0; i < c.num_neighbors; i++) {
                             if (neighbor_info[i].neighbor_addr == next_hop_addr) {

@@ -449,15 +449,14 @@ path_component *prepend(uint16_t node, path_component *next) {
 }
 
 void compute_random_paths(global_view *p, mixnet_address src_addr, global_view* dest_node) {
-    compute_shortest_paths(p, src_addr);
-    printf("%d computing random path for %d\n", src_addr, dest_node->node_addr);
+    //printf("%d computing random path for %d\n", src_addr, dest_node->node_addr);
     path_component *shortest_path = dest_node->path;
     uint16_t shortest_size = dest_node->path_size;
     global_view *self = find_in_global_view_list(p, src_addr);
-    if (shortest_size == 0 && self->edge_count > 1) {
-        int num = (rand() % (1 - 0 + 1)) + 0;
-        printf("num: %d\n", num);
-            if (num == 0) {
+    if (self->edge_count > 1) {
+        int num = (rand() % (2 - 1 + 1)) + 1;
+        //printf("num: %d\n", num);
+            if (num % 2 == 0) {
                 mixnet_address neighbor = 0;
                 for (uint16_t i = 0; i < self->edge_count; i++) {
                     if (self->edge_list[i].neighbor_mixaddr != dest_node->node_addr) {
@@ -465,70 +464,27 @@ void compute_random_paths(global_view *p, mixnet_address src_addr, global_view* 
                         break;
                     }
                 }
-                path_component *new_path = prepend(src_addr, NULL);
+                path_component *copied_path = copy_prefix(shortest_path, shortest_size);
+                path_component *new_path = prepend(src_addr, copied_path);
                 new_path = prepend(neighbor, new_path);
                 dest_node->random_path = new_path;
-                dest_node->random_path_size = 2;
+                dest_node->random_path_size = 2 + shortest_size;
             } else {
                 dest_node->random_path = dest_node->random_path;
                 dest_node->random_path_size = dest_node->path_size;
             }
     } else {
-        int num = (rand() % (shortest_size - 0 + 1)) + 0;
-        // if (num > 0) {
-        //     path_component *new_path = malloc(sizeof(path_component));
-        //     if (new_path == NULL) {
-        //         // // printf("malloc 3 failed\n");
-        //         return NULL;
-        //     }
-        //     memcpy(new_path, shortest_path, sizeof(path_component));
-        //     //path_component *current_new = new_path;
-
-        //     path_component *self = malloc(sizeof(path_component));
-        //     if (self == NULL) {
-        //         return NULL;
-        //     }
-        //     self->node = src_addr;
-        //     self->next = new_path;
-        // }
-        // for (int i = 0; i < num; i++) {
-        //     mixnet_address head = shortest_path->node;
-        // }
-        if (num == 0) {
-            dest_node->random_path = dest_node->random_path;
-            dest_node->random_path_size = dest_node->path_size;
-        } else { //this whole chunk might not work... the public test case doesn't test this
-            path_component *forward_num = copy_prefix(shortest_path, num);
-            path_component *back = prepend(src_addr, NULL);
-            for (path_component *tmp = forward_num; tmp; tmp = tmp->next)
-                back = prepend(tmp->node, back);
-
-            path_component *rest = copy_prefix(shortest_path, shortest_size);    
-            path_component *skip = rest;
-            for (int i = 0; i < num && skip; i++) skip = skip->next;
-
-            path_component *tail = forward_num;
-            while (tail && tail->next) tail = tail->next;
-            if (tail) tail->next = back;
-            else forward_num = back;
-
-            path_component *tail2 = back;
-            while (tail2 && tail2->next) tail2 = tail2->next;
-            if (tail2) tail2->next = skip;
-            else if (forward_num) tail->next = skip;
-            else forward_num = skip;
-            dest_node->random_path = forward_num;
-            dest_node->random_path_size = shortest_size + num + num;
-        }
+        dest_node->random_path = dest_node->random_path;
+        dest_node->random_path_size = dest_node->path_size;
     }
-    printf("%d random paths computed\n", src_addr);
-    printf("random path to %d: [", dest_node->node_addr);
-    path_component *start = dest_node->random_path;
-    while (start != NULL) {
-        printf("%d ", start->node);
-        start = start->next;
-    }
-    printf("]\n");
+    //printf("%d random paths computed\n", src_addr);
+    //printf("random path to %d: [", dest_node->node_addr);
+    // path_component *start = dest_node->random_path;
+    // while (start != NULL) {
+    //     printf("%d ", start->node);
+    //     start = start->next;
+    // }
+    //printf("]\n");
 }
 
 mixnet_packet* create_forwarding_packet(
@@ -630,8 +586,8 @@ void run_node(void *const handle,
     uint64_t last_root_message_time = time_now();
     bool lsa_done = false;
 
-    printf("running node: %d\n", c.node_addr);
-    printf("num neigbors: %d\n", c.num_neighbors);
+    //printf("running node: %d\n", c.node_addr);
+    //printf("num neigbors: %d\n", c.num_neighbors);
     stp_info my_info = {c.node_addr, c.node_addr, 0};
     neighbor_state_t *neighbor_info = (neighbor_state_t*)calloc(c.num_neighbors, sizeof(neighbor_state_t));
 
@@ -758,7 +714,7 @@ void run_node(void *const handle,
 
                     if (packet->type == PACKET_TYPE_DATA) {
                         mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
-                        printf("user sending data packet from %d to %d\n", c.node_addr, payload->dst_address);
+                        //printf("user sending data packet from %d to %d\n", c.node_addr, payload->dst_address);
                         // print_in_global_view_list(adj_list_start, c.node_addr);
                         global_view* destination_node = find_in_global_view_list(adj_list_start, payload->dst_address);
 
@@ -900,7 +856,7 @@ void run_node(void *const handle,
                     }
                } else { // DATA or PING packet for forwarding or destination
                     mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
-                    printf("%d receiving data/ping packet\n", c.node_addr);
+                    //printf("%d receiving data/ping packet\n", c.node_addr);
                     if (payload->dst_address == c.node_addr) {
                         forward_packet(handle, c.num_neighbors, packet);                    
                     } else {
@@ -933,7 +889,7 @@ void run_node(void *const handle,
 
                             if (packet_counter >= c.mixing_factor) {
                                 for (uint16_t i = 0; i < packet_counter; i++) {
-                                    printf("%d sending data/ping packet to %d\n", c.node_addr, neighbor_info[mix_packets[i].port].neighbor_addr);
+                                    //printf("%d sending data/ping packet to %d\n", c.node_addr, neighbor_info[mix_packets[i].port].neighbor_addr);
                                     mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
                                 }
                                 packet_counter = 0;

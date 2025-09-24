@@ -228,8 +228,6 @@ static uint64_t time_now(void) {
 global_view* find_in_global_view_list(global_view *p, mixnet_address to_find_addr) {
     global_view *current = p;
     while (current != NULL) {
-        //// printf("global_view node: %d\n", current->node_addr);
-        //// printf("%d edge count: %d\n", current->node_addr, current->edge_count);
         if (current->node_addr == to_find_addr) {
             return current;
         }
@@ -238,15 +236,24 @@ global_view* find_in_global_view_list(global_view *p, mixnet_address to_find_add
     return NULL;
 }
 
-// void print_in_global_view_list(global_view *p, mixnet_address node_addr) {
-//     // printf("PRINTING %d global_view \n", node_addr);
-//     global_view *current = p;
-//     while (current != NULL) {
-//         // printf("global_view node: %d\n", current->node_addr);
-//         // printf("%d edge count: %d\n", current->node_addr, current->edge_count);
-//         current = current->next;
-//     }
-// }
+void print_in_global_view_list(global_view *p, mixnet_address node_addr) {
+    printf("PRINTING %d global_view \n", node_addr);
+    global_view *current = p;
+    while (current != NULL) {
+        printf("global_view node: %d\n", current->node_addr);
+        printf("    %d edge count: %d\n", current->node_addr, current->edge_count);
+        printf("    %d path len: %d\n", current->node_addr, current->path_size);
+        printf("    %d distance: %d\n", current->node_addr, current->distance);
+        printf("    path to %d: [", current->node_addr);
+        path_component *start = current->path;
+        while (start != NULL) {
+            printf("%d ", start->node);
+            start = start->next;
+        }
+        printf("]\n");
+        current = current->next;
+    }
+}
 
 
 // In node.c, replace your existing add_to_global_view function
@@ -290,8 +297,8 @@ void add_to_global_view(global_view **p,
 }
 
 void compute_shortest_paths(global_view *p, mixnet_address src_addr) {
-    // // printf("%d computing shortest paths\n", src_addr);
-    //print_in_global_view_list(p, src_addr);
+    printf("%d computing shortest paths\n", src_addr);
+    print_in_global_view_list(p, src_addr);
     global_view *current = p;
     while (current != NULL) {
         current->distance = (uint16_t)INT_MAX;
@@ -304,6 +311,7 @@ void compute_shortest_paths(global_view *p, mixnet_address src_addr) {
 
     global_view *source = find_in_global_view_list(p, src_addr);
     if (source == NULL) {
+        printf("couldn't find source node???\n");
         return; // Something very wrong
     }
     source->distance = 0;
@@ -311,7 +319,7 @@ void compute_shortest_paths(global_view *p, mixnet_address src_addr) {
 
     pq_entry *pq =  malloc(sizeof(pq_entry));
     if (pq == NULL) {
-        // // printf("malloc 9 failed\n");
+        printf("malloc 9 failed\n");
         return;
     }
     pq->distance = 0;
@@ -320,37 +328,44 @@ void compute_shortest_paths(global_view *p, mixnet_address src_addr) {
 
 
     while (!pq_empty(pq)) {
-        pq_entry *pq_min = pq_pop(&pq);
-        global_view *pq_min_node = find_in_global_view_list(p, pq_min->node);       
-        if (pq_min_node->distance == (uint16_t)INT_MAX) continue;
+        pq_entry *u = pq_pop(&pq);
+        global_view *u_node = find_in_global_view_list(p, u->node);
+        printf("u: %d\n", u_node->node_addr);       
+        if (u_node->distance == (uint16_t)INT_MAX) continue;
 
 
-        mixnet_lsa_link_params* edge_list = pq_min_node->edge_list;
-        uint16_t u_dist = pq_min_node->distance;
-        path_component *u_path = pq_min_node->path;
+        mixnet_lsa_link_params* edge_list = u_node->edge_list;
+        uint16_t u_dist = u_node->distance;
+        path_component *u_path = u_node->path;
 
 
-        for (int i = 0; i < pq_min_node->edge_count; i++) {
+        for (int i = 0; i < u_node->edge_count; i++) {
             mixnet_address v_addr = edge_list[i].neighbor_mixaddr;
             global_view *v_node = find_in_global_view_list(p, v_addr);
+            printf("    v: %d\n", v_node->node_addr); 
             if (v_node == NULL) {
+                printf("        %d not in global_view\n", v_addr);
                 continue;
             }
             uint16_t weight = edge_list[i].cost;
             
             uint16_t new_dist = u_dist + weight;
             uint16_t old_dist = v_node->distance;
+            printf("        dist[v]: %d\n", old_dist);
+            printf("        dist[u]: %d\n", u_dist);
+            printf("        dist[u] + weight: %d\n", new_dist);
 
             bool should_update = false;
 
             if (new_dist < old_dist) {
                 should_update = true;
             } else if (new_dist == old_dist) {
+                printf("        tie break\n");
                 mixnet_address new_first_hop;
-                if (pq_min_node->node_addr == src_addr) {
+                if (u_node->node_addr == src_addr) {
                     new_first_hop = v_addr;
                 } else {
-                    new_first_hop = pq_min_node->first_hop_addr;
+                    new_first_hop = u_node->first_hop_addr;
                 }
                 if (new_first_hop < v_node->first_hop_addr) {
                     should_update = true;
@@ -361,27 +376,45 @@ void compute_shortest_paths(global_view *p, mixnet_address src_addr) {
             // In compute_shortest_paths(), inside the if (should_update) block
 
             if (should_update) {
+                printf("        update\n");
+                printf("        size of path to u: %d\n", u_node->path_size);
+                printf("        path to %d: [", u_node->node_addr);
+                path_component *start = u_node->path;
+                while (start != NULL) {
+                    printf("%d ", start->node);
+                    start = start->next;
+                }
+                printf("]\n");
                 path_component* new_path = NULL;
-                if (pq_min_node->node_addr != src_addr) {
-                    new_path = add_to_path(u_path, pq_min_node->node_addr);
+                if (u_node->node_addr != src_addr) {
+                    new_path = add_to_path(u_path, u_node->node_addr);
                 }
                 
                 v_node->distance = new_dist;
                 v_node->path = new_path;
-                v_node->path_size = (pq_min_node->node_addr == src_addr) ? 0 : pq_min_node->path_size + 1;
+                v_node->path_size = (u_node->node_addr == src_addr) ? 0 : u_node->path_size + 1;
 
-                if (pq_min_node->node_addr == src_addr) {
+                if (u_node->node_addr == src_addr) {
                     v_node->first_hop_addr = v_addr;
                 } else {
-                    v_node->first_hop_addr = pq_min_node->first_hop_addr;
+                    v_node->first_hop_addr = u_node->first_hop_addr;
                 }
-                
+                printf("        dist[v]: %d\n", v_node->distance);
+                printf("        size of path to v: %d\n", v_node->path_size);
+                printf("        path to %d: [", v_node->node_addr);
+                path_component *curr = v_node->path;
+                while (curr != NULL) {
+                    printf("%d ", curr->node);
+                    curr = curr->next;
+                }
+                printf("]\n");
                 pq_push(&pq, v_node->distance, v_addr);
             }
         }
     //    free(pq_min);
     }
-    // // printf("%d shortest paths computed\n", src_addr);
+    printf("%d shortest paths computed\n", src_addr);
+    print_in_global_view_list(p, src_addr);
 }
 
 mixnet_packet* create_forwarding_packet(
@@ -443,6 +476,7 @@ void run_node(void *const handle,
     (void) handle;
     int reelection_interval = c.reelection_interval_ms;
     int hello_interval = c.root_hello_interval_ms;
+    int temp_lsa_counter = 0;
 
 
     // mixing stuff
@@ -482,8 +516,8 @@ void run_node(void *const handle,
     uint64_t last_root_message_time = time_now();
     bool lsa_done = false;
 
-    // printf("running node: %d\n", c.node_addr);
-    // printf("num neigbors: %d\n", c.num_neighbors);
+    printf("running node: %d\n", c.node_addr);
+    printf("num neigbors: %d\n", c.num_neighbors);
     stp_info my_info = {c.node_addr, c.node_addr, 0};
     neighbor_state_t *neighbor_info = (neighbor_state_t*)calloc(c.num_neighbors, sizeof(neighbor_state_t));
 
@@ -606,6 +640,8 @@ void run_node(void *const handle,
 
                     if (packet->type == PACKET_TYPE_DATA) {
                         mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
+                        printf("user sending data packet from %d to %d\n", c.node_addr, payload->dst_address);
+                        print_in_global_view_list(adj_list_start, c.node_addr);
                         global_view* destination_node = find_in_global_view_list(adj_list_start, payload->dst_address);
 
                         if (destination_node != NULL && destination_node->path != NULL) {
@@ -707,6 +743,7 @@ void run_node(void *const handle,
                     }
                 } else if (packet->type == PACKET_TYPE_LSA) { // PACKET TYPE LSA
                     if (!neighbor_info[port].blocked) {
+                        temp_lsa_counter++;
                         mixnet_packet_lsa* payload = (mixnet_packet_lsa*)(packet->payload);
                         add_to_global_view(&adj_list_start, payload->node_address, payload->links, payload->neighbor_count);
                         
@@ -724,7 +761,9 @@ void run_node(void *const handle,
                                 mixnet_send(handle, port_n, to_send_packet);
                             }
                         }
-                        compute_shortest_paths(adj_list_start, c.node_addr);
+                        if (temp_lsa_counter == 6) {
+                            compute_shortest_paths(adj_list_start, c.node_addr);
+                        }
                     }
                 } else if (packet->type == PACKET_TYPE_FLOOD) {
                     if (!neighbor_info[port].blocked) {
@@ -740,6 +779,7 @@ void run_node(void *const handle,
                     }
                } else { // DATA or PING packet for forwarding or destination
                     mixnet_packet_routing_header* payload = (mixnet_packet_routing_header*)(packet->payload);
+                    printf("%d receiving data/ping packet\n", c.node_addr);
                     if (payload->dst_address == c.node_addr) {
                         forward_packet(handle, c.num_neighbors, packet);                    
                     } else {
@@ -772,6 +812,7 @@ void run_node(void *const handle,
 
                             if (packet_counter >= c.mixing_factor) {
                                 for (uint16_t i = 0; i < packet_counter; i++) {
+                                    printf("%d sending data/ping packet to %d\n", c.node_addr, neighbor_info[mix_packets[i].port].neighbor_addr);
                                     mixnet_send(handle, mix_packets[i].port, mix_packets[i].packet);
                                 }
                                 packet_counter = 0;
@@ -788,3 +829,151 @@ void run_node(void *const handle,
     //// // printf("Node %d thinks %d is root\n", c.node_addr, my_info.root_addr);
     // free(neighbor_info);
 }
+
+// 15 computing shortest paths
+// PRINTING 15 global_view 
+//     global_view node: 0
+//         0 edge count: 2
+//         0 path len: 0
+//         0 distance: 65535
+//         path to 0: []
+//     global_view node: 21
+//         21 edge count: 2
+//         21 path len: 0
+//         21 distance: 65535
+//         path to 21: []
+//     global_view node: 42
+//         42 edge count: 2
+//         42 path len: 0
+//         42 distance: 65535
+//     path to 42: []
+//         global_view node: 65534
+//         65534 edge count: 2
+//         65534 path len: 0
+//         65534 distance: 65535
+//         path to 65534: []
+//     global_view node: 81
+//         81 edge count: 2
+//         81 path len: 0
+//         81 distance: 65535
+//         path to 81: []
+//     global_view node: 31
+//         31 edge count: 2
+//         31 path len: 0
+//         31 distance: 65535
+//         path to 31: []
+//     global_view node: 15
+//         15 edge count: 2
+//         15 path len: 0
+//         15 distance: 0
+//         path to 15: []
+// u: 15
+//     v: 31
+//         dist[v]: 65535
+//         dist[u] + weight: 1
+//         update
+//         size of path to u: 0
+//         path to 15: []
+//         dist[v]: 1
+//         size of path to v: 0
+//         path to 31: []
+//     v: 42
+//         dist[v]: 65535
+//         dist[u] + weight: 1
+//         update
+//         size of path to u: 0
+//         path to 15: []
+//         dist[v]: 1
+//         size of path to v: 0
+//         path to 42: []
+// u: 42
+//     v: 21
+//         dist[v]: 65535
+//         dist[u] + weight: 2
+//         update
+//         size of path to u: 0
+//         path to 42: []
+//         dist[v]: 2
+//         size of path to v: 1
+//         path to 21: [42] 
+//     v: 15
+//     dist[v]: 0
+//     dist[u] + weight: 2
+// u: 31
+//     v: 15
+//         dist[v]: 0
+//         dist[u] + weight: 2
+//     v: 65534
+//         dist[v]: 65535
+//         dist[u] + weight: 2
+//         update
+//         size of path to u: 0
+//         path to 31: []
+//         dist[v]: 2
+//         size of path to v: 1
+//         path to 65534: [31] 
+// u: 65534
+//     v: 0
+//         dist[v]: 65535
+//         dist[u] + weight: 3
+//         update
+//         size of path to u: 1
+//         path to 65534: [31] 
+//         dist[v]: 3
+//         size of path to v: 2
+//         path to 0: [31 65534]
+//     v: 21
+//         dist[v]: 2
+//         dist[u] + weight: 3
+// u: 21
+//     v: 0
+//         dist[v]: 3
+//         dist[u] + weight: 3
+//         tie break
+//     v: 21
+//         dist[v]: 2
+//         dist[u] + weight: 3
+// u: 0
+//     v: 0
+//         dist[v]: 3
+//         dist[u] + weight: 4
+//     v: 21
+//         dist[v]: 2
+//         dist[u] + weight: 4
+// 15 shortest paths computed
+// PRINTING 15 global_view 
+//     global_view node: 0
+//         0 edge count: 2
+//         0 path len: 2
+//         0 distance: 3
+//         path to 0: [31 65534] 
+//     global_view node: 21
+//         21 edge count: 2
+//         21 path len: 1
+//         21 distance: 2
+//         path to 21: [42] 
+//     global_view node: 42
+//         42 edge count: 2
+//         42 path len: 0
+//         42 distance: 1
+//         path to 42: []
+//     global_view node: 65534
+//         65534 edge count: 2
+//         65534 path len: 1
+//         65534 distance: 2
+//         path to 65534: [31] 
+//     global_view node: 81
+//         81 edge count: 2
+//         81 path len: 0
+//         81 distance: 65535
+//         path to 81: []
+//     global_view node: 31
+//         31 edge count: 2
+//         31 path len: 0
+//         31 distance: 1
+//         path to 31: []
+//     global_view node: 15
+//         15 edge count: 2
+//         15 path len: 0
+//         15 distance: 0
+//         path to 15: []
